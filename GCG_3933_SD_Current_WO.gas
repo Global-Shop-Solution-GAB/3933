@@ -1,0 +1,231 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+
+
+V.Local.sError.Declare(String)
+
+'Quote 4928
+'coded by TRT
+'This GAB will remove the hidden column from the BDF on the Supply and Demand Screen, supply bdf
+'it will change the column title from *Operaton to Curr. Operation, then list the current L, O operation that the listed job(if the item is a job line) is on.
+'requires a new INV500GI program for this to work.
+
+'BN May 9, 2017: The original Hook(Load Grid)14056 does not fire, I applied to another hook (Post Load Grids Hook) 14055
+
+F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,14056)
+	
+'	F.Intrinsic.Control.If(V.Caller.Switches,=,"K")
+		F.Intrinsic.Control.CallSub(Bdfpop)
+'	F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ElseIf(V.Caller.Hook,=,14055)
+
+	F.Intrinsic.Control.CallSub(Bdfpop)
+
+F.Intrinsic.Control.ElseIf(V.Caller.Hook,=,14061)
+'	F.Intrinsic.Control.If(V.Caller.Switches,=,"K")
+		F.Intrinsic.Control.CallSub(Hidecolumn)
+'	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.CallSub(Unload)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3933_SD_Current_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.Main.End
+
+Program.Sub.Unload.Start
+
+F.Intrinsic.UI.CloseWaitDialog
+
+F.ODBC.Connection!conx.Close
+
+F.Intrinsic.Control.End
+
+Program.Sub.Unload.End
+
+Program.Sub.BDFPop.Start
+F.Intrinsic.Control.SetErrorHandler("BDFPop_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+
+
+V.Local.iRows.Declare(Long)
+V.Local.iCols.Declare(Long)
+V.Local.iS.Declare(String)
+V.Local.sRow.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.sData.Declare(String)
+V.Local.iSeek.Declare(Long)
+V.Local.sTitle.Declare(String)
+V.Local.iSpecCol.Declare(Long)
+V.Local.iT.Declare(Long)
+
+F.Intrinsic.UI.InvokeWaitDialog("Loading current operations for jobs...")
+
+V.Local.iSpecCol.Set(0)
+'post grid load hook
+F.Intrinsic.BDF.Load("AUX001","AUX001")
+F.Intrinsic.bdf.Clone("AUX001","CLONE")
+F.Intrinsic.BDF.ReadRowCount("AUX001",V.Local.iRows)
+F.Intrinsic.Math.Sub(V.Local.iRows,1,V.Local.iRows)
+F.Intrinsic.BDF.ReadColumnTitle("AUX001",V.Local.sTitle)
+F.Intrinsic.BDF.ReadColumnDataType("AUX001",V.Local.sData)
+
+'first we have to find the column title that has the *Operation value in it. That way we know its the special column
+'F.Intrinsic.String.Split(V.Local.sTitle,"*!*",V.Local.sTitle)
+'F.Intrinsic.Control.For(V.Local.iT,0,V.Local.sTitle.UBound,1)
+'	F.Intrinsic.Control.If(V.Local.sTitle(v.Local.iT).Trim,=,"*Operation","OR",V.Local.sTitle(v.Local.iT).Trim,=,"Cur. Operation")
+'		V.Local.iSpecCol.Set(V.Local.iT)
+'		F.Intrinsic.Control.ExitFor(V.Local.iT)
+'	F.Intrinsic.Control.EndIf
+'F.Intrinsic.Control.next(V.Local.iT)
+
+'correction, it always seems that that column we want will be in column 7.
+V.Local.iSpecCol.Set(7)
+
+F.Intrinsic.Control.For(V.Local.iS,0,V.Local.iRows,1)
+	F.Intrinsic.BDF.ReadRow("AUX001",V.Local.iS,V.Local.sRow)
+	F.Intrinsic.String.Split(V.Local.sRow,"|~|",V.Local.srow)
+	'loop through each column in our row?
+	F.Intrinsic.Control.For(V.Local.iCols,0,V.Local.sRow.UBound,1)
+		F.Intrinsic.Control.If(V.Local.sRet.Trim,=,"")
+			V.Local.sRet.Set(V.Local.sRow(v.Local.iCols))
+		F.Intrinsic.Control.Else
+			F.Intrinsic.Control.If(V.Local.iCols,=,V.Local.iSpecCol)
+				F.Intrinsic.Control.If(V.Local.sRow(1).Trim,=,"Job")
+					'figureoutourcurrentsequencebycallinWOCurrOppassingthejobsuffixnumbertoit
+					'also need to make sure that our column 1 is reading job.
+					F.Intrinsic.Control.CallSub(Wocurrop,"Job",V.Local.sRow(0))
+					'havetoconcatthePWtodoourwithinpixelsforthebdf.
+					F.Intrinsic.String.Concat(V.Local.sRet,"|~|",V.args.Seq.Trim,"]=[CA::1]=[",V.local.sRet)
+				F.Intrinsic.Control.Else
+					F.Intrinsic.String.Concat(V.Local.sRet,"|~|",V.Local.sRet)
+				F.Intrinsic.Control.EndIf
+			F.Intrinsic.Control.Else
+				F.Intrinsic.String.Concat(V.Local.sRet,"|~|",V.Local.sRow(v.Local.iCols),V.Local.sRet)
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.next(V.Local.iCols)
+	F.Intrinsic.BDF.WriteRow("CLONE",V.Local.sRet)
+	V.Local.sRet.Set("")
+F.Intrinsic.Control.Next(V.Local.iS)
+
+'first then we want to change the column title of this column
+F.Intrinsic.BDF.SetColumnTitle("Clone",v.Local.iSpecCol,"Cur. Operation]=[PW::80]=[]=[CA::7]=[")
+'then save it back to our aux001
+F.Intrinsic.BDF.Save("CLONE","AUX001")
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("BDFPop_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3933_SD_Current_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.BDFPop.End
+
+Program.Sub.WOCurrOp.Start
+F.Intrinsic.Control.SetErrorHandler("WOCurrOp_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sSQL.Declare(String)
+V.Local.sJob.Declare(String)
+V.Local.sSuff.Declare(String)
+V.Local.sSeq.Declare(String)
+
+F.Intrinsic.String.RPad(V.Args.Job," ",10,V.Local.sJob)
+F.Intrinsic.String.Right(V.Local.sJob,3,V.Local.sSuff)
+F.Intrinsic.String.Left(V.Local.sJob,6,V.Local.sJob)
+
+'F.Intrinsic.Debug.InvokeDebugger
+F.Intrinsic.Debug.Stop
+
+'we are going to get the outside operation or the labor sequence that the current job from the grid should be currently working on.
+'wasn't sure if they want to show material sequences or not? If they do just a simply query change that eliminates comments seqeuences.
+F.Intrinsic.String.Build("Select Top 1 Seq, Part From V_Job_Operations Where Job = '{0}' And Suffix = '{1}' And Flag_Closed <> 'Y' And LMO In ('L','O') And Seq < '995000' Order By Seq",V.Local.sJob.Trim,V.Local.sSuff.Trim,V.Local.sSQL)
+F.ODBC.Connection!conX.OpenLocalRecordsetRO("rst",V.Local.sSQL)
+F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,<>,True)
+	V.Local.sSeq.Set(V.ODBC.conX!rst.FieldValTrim!Part)
+F.Intrinsic.Control.Else
+	V.Local.sSeq.Set("")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Variable.AddRV("Seq",V.Local.sSeq)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("WOCurrOp_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3933_SD_Current_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.WOCurrOp.End
+
+Program.Sub.HideColumn.Start
+F.Intrinsic.Control.SetErrorHandler("HideColumn_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+'F.Intrinsic.UI.InvokeWaitDialog("Refreshing Supply Grid...")
+
+'post grid load hook
+'hide our column back so they can't enable it, then set pw to zero so they don't see it.
+F.Intrinsic.BDF.Load("AUX001","AUX001")
+F.Intrinsic.bdf.Clone("AUX001","CLONE")
+F.Intrinsic.BDF.SetColumnTitle("Clone",7,"*Operation]=[PW::0]=[]=[CA::7]=[")
+F.Intrinsic.BDF.Save("CLONE","AUX001")
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("HideColumn_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: GCG_3933_SD_Current_WO.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Unload)
+Function.Intrinsic.Control.EndIf
+
+
+Program.Sub.HideColumn.End
+
+Program.Sub.Comments.Start
+${$0$}$GCG_SD_Current_WO$}$TRT$}$4/1/2014$}$False
+${$1$}$$}$$}$2$}$14056$}$INS500-SWTCHK-LOAD-GRIDS-HOOK$}$5/6/2016 2:32:03 PM$}$(Program: INV500GI?; Screen: INS500)
+
+${$1$}$$}$$}$1$}$14060$}$INS500-EXIT-HOOK$}$4/4/2014 9:45:20 AM$}$(Program: INV500GI?; Screen: INS500)
+exit screen, hide the column and change name back to *Operation.
+
+${$3$}$0$}$$}$-1$}$-1$}$$}$1/1/1900$}$Quote 4928
+
+Program.Sub.Comments.End
+
